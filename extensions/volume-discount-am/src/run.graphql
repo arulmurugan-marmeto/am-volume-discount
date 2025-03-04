@@ -1,0 +1,24 @@
+query RunInput {
+  cart {
+    lines {
+      id
+      quantity
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          product {
+            id
+            handle
+            hasAnyTag(tags: ["volume_discount"])
+          }
+        }
+      }
+    }
+  },
+  discountNode{
+     metafield (namespace: "quantity-based", key: "volume_discount") {
+        value
+      }
+  }
+}
