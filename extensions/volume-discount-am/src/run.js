@@ -1,65 +1,52 @@
 // @ts-check
 import { DiscountApplicationStrategy } from "../generated/api";
 
-/**
- * @typedef {import("../generated/api").RunInput} RunInput
- * @typedef {import("../generated/api").FunctionRunResult} FunctionRunResult
- */
-
-/**
- * @type {FunctionRunResult}
- */
 const EMPTY_DISCOUNT = {
   discountApplicationStrategy: DiscountApplicationStrategy.First,
   discounts: [],
 };
 
-/**
- * @param {RunInput} input
- * @returns {FunctionRunResult}
- */
 export function run(input) {
-  // Parse metafield value safely
-  const configuration = JSON.parse(input?.discountNode?.metafield?.value ?? "{}");
-  if (!configuration?.discounts || !Array.isArray(configuration.discounts)) {
-    return EMPTY_DISCOUNT;
-  }
+  const eligibleDiscounts = input.cart.lines.flatMap((cartLine) => {
+    const product = cartLine.merchandise.product;
+    const volumeDiscountConfig = product?.metafield?.value;
+    const isProductEligibleForDiscount = product?.hasAnyTag;
 
-  let discountApplication = [];
+    if (!volumeDiscountConfig || !isProductEligibleForDiscount) return [];
 
-  discountApplication = input.cart.lines.map((line) => {
-    if (line.merchandise.__typename === "ProductVariant" && line.merchandise.product.hasAnyTag) {
-      // Sort discounts in descending order of quantity (so we check the highest valid tier first)
-      let metaData = configuration.discounts.slice().sort((a, b) => b.quantity - a.quantity);
-      
-      // Find the highest applicable discount for the line quantity
-      let metaInfo = metaData.find((tier) => line.quantity >= tier.quantity);
-      
-      if (metaInfo) {
-        return {
-          message: metaInfo.message,
-          targets: [
-            {
-              cartLine: {
-                id: line.id,
-              },
-            },
-          ],
-          value: {
-            percentage: {
-              value: metaInfo.discount,
-            },
-          },
-        };
-      }
+    try {
+      const discountTiers = JSON.parse(volumeDiscountConfig);
+      if (!Array.isArray(discountTiers)) return [];
+
+      const validDiscountTiers = discountTiers
+        .filter((tier) => tier.quantity > 0 && tier.discount > 0)
+        .sort((a, b) => a.quantity - b.quantity);
+
+      const applicableTier = validDiscountTiers.reduce((bestTier, currentTier) =>
+        cartLine.quantity >= currentTier.quantity ? currentTier : bestTier,
+        null
+      );
+
+      if (!applicableTier) return [];
+
+      return [
+        {
+          targets: [{ cartLine: { id: cartLine.id } }],
+          value: { percentage: { value: applicableTier.discount.toString() } },
+          message:
+            applicableTier.message ||
+            `${applicableTier.discount}% off for bulk purchase`,
+        },
+      ];
+    } catch {
+      return [];
     }
-    return null;
-  }).filter((value) => value !== null);
+  });
 
-  return discountApplication.length > 0
+  return eligibleDiscounts.length > 0
     ? {
-        discountApplicationStrategy: DiscountApplicationStrategy.Maximum,
-        discounts: discountApplication,
-      }
+      discounts: eligibleDiscounts,
+      discountApplicationStrategy: DiscountApplicationStrategy.All,
+    }
     : EMPTY_DISCOUNT;
 }
